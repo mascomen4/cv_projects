@@ -4,12 +4,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from dt_template_match import dt_template_match
 import imutils
+import pandas as pd
 
-image = cv.imread("data/car1.jpg")
-image = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-image2 = image.copy()
-template = cv.imread("data/rec1.png", 0)
-w, h = template.shape[::-1]
+# image = cv.imread("data/car1.jpg")
+# image = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+# image2 = image.copy()
+# template = cv.imread("data/rec1.png", 0)
+# w, h = template.shape[::-1]
 
 # TODO: learn What is the difference between binary, int32, float32 image? Where do they typically used?
 # NOTE: All of the images should be of the same size, so that the program can find the right number from
@@ -17,25 +18,45 @@ w, h = template.shape[::-1]
 
 # Perform some median filtering on the image just for the sake of my eyes
 # Probably, it will also help to contour detector. And then sharpen the image to enhance the edges
-median = cv.medianBlur(image2, 1)
-sharpen_kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
-sharpen = cv.filter2D(median, -1, sharpen_kernel)
-
-median_t = cv.medianBlur(template, 1)
-sharpen_t = cv.filter2D(median_t, -1, sharpen_kernel)
 
 # 1. Perform the Canny filtering on the image
 # It performs for me the noise reduction, finds the gradients and connects the lines together.
-edges = cv.Canny(median, 100, 255)
-temp = cv.Canny(median_t, 50, 200)
-
 # 2. Then we need to perform the distance transform to the edges
 
 
-def find_plate_distance_transform(edges, image, image2):
+def image_batch(batch_size, labeled=True):
+    images = []
+    path = "data/labeled/" if labeled else "data/non-labeled/"
+
+    for i in range(batch_size):
+        img = cv.imread(path + f"{i}.jpg" if labeled else f"{i+405}.jpg")
+        if img is None:
+            continue
+        img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        images.append(img)
+    return images
+
+
+def process_images(images):
+    # Probably, I need to reduce the size of the images.
+    processed = []
+    canny = []
+    for img in images:
+        median = cv.medianBlur(img, 3)
+        sharpen_kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+        sharpen = cv.filter2D(median, -1, sharpen_kernel)
+        edges = cv.Canny(median, 100, 255)
+
+        processed.append(sharpen)
+        canny.append(edges)
+    return processed, canny
+
+
+def find_plate_distance_transform(edges, temp, image, image2):
     # Distance transform is quite good, I even wrote a function for that, but templates are fixed.
     # Not a good decision for my data
     dist = cv.distanceTransform(edges, cv.DIST_L2, 3)
+    # Performs template matching
     coord, w, h = dt_template_match(dist, temp)
     cv.rectangle(image, (coord[1], coord[0]), (coord[1]+w, coord[0]+h), 255, 2)
     cv.imshow("a", image)
@@ -44,84 +65,59 @@ def find_plate_distance_transform(edges, image, image2):
     cv.waitKey()
 
 
-def find_plate_contours(edges, image):
-    contours = cv.findContours(edges.copy(), cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-    contours = imutils.grab_contours(contours)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
-    screenCnt = None
-    for contour in contours:
-        perimeter = cv.arcLength(contour, True)
-        approx = cv.approxPolyDP(contour, 0.018*perimeter, True)
-        if len(approx) == 4:
-            cv.drawContours(image, [approx], 0, color=(0, 0, 0), thickness=2)
-            cv.imshow("main", image)
-            cv.waitKey()
+def find_plate_contours(edges):
+    """
+    :param edges: Image from Canny transform
+    :return: 2D Matrix where 0 axis is images, and 1 axis is the contours in images
+    """
+    imgs_contours = []
+    for img_edge in edges:
+        contours = cv.findContours(img_edge.copy(), cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+        contours = imutils.grab_contours(contours)
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
+        found_cnts = []
+        for contour in contours:
+            perimeter = cv.arcLength(contour, True)
+            approx = cv.approxPolyDP(contour, 0.018*perimeter, True)
+            if len(approx) == 4:
+                found_cnts.append(approx)
+        imgs_contours.append(found_cnts)
+    return imgs_contours
 
 
-if __name__ == "__main__":
-    find_plate_contours(edges, image)
-
-=======
-import pandas as pd
-#import tensorflow
-
-TEMPLATE = cv.imread("data/rec.jpg", 0)
-W, H = TEMPLATE.shape[::-1]
-
-# Take example image
-EXAMPLE_IMG = cv.imread("data/car1.jpg", 0)
+def draw_contours(images, contours):
+    # WARNING: PLOTS THE CONTOURS DIRECTLY ON THE GIVEN IMAGES.
+    for i, image in enumerate(images):
+        cv.drawContours(image, contours[i], -1, color=(10,255,255), thickness=4)
 
 
-def read_images():
-    res = []
-    for i in range(433):
-        image = cv.imread("data/images/Cars{}.png".format(i))
-        image = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-        res.append(image)
-    return res
+def write_images(images, path):
+    for i, image in enumerate(images):
+        cv.imwrite(path + f"{i}.jpg", image)
 
 
-def show_rand_image(imgs):
-    rand = np.random.randint(1, 200)
-    cv.imshow("Sample image", imgs[rand])
-    cv.waitKey()
+def elongation(m):
+    x = m['mu20'] + m['mu02']
+    y = 4 * m['mu11']**2 + (m['mu20'] - m['mu02'])**2
+    return (x + y**0.5) / (x - y**0.5)
 
 
-def process_image(image):
-    # Reduce the noise a little bit
-    #blur = cv.medianBlur(image, 3)
-
-    # Sharpening kernel
-    kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
-    sharpen = cv.filter2D(image, -1, kernel)
-
-    # Automatic color correction
-    #min_val, max_val, min_loc, max_loc = cv.minMaxLoc(sharpen)
-    #sharpen = (sharpen - min_val)*255/(max_val - min_val)
-
-    return sharpen
+def find_moments(contours):
+    mu = [None] * len(contours)
+    for i in range(len(contours)):
+        mu[i] = cv.moments(contours[i])
+    return mu
 
 
-def find_plate_template(image, template):
-    edges = cv.Canny(image.copy(), 100, 120)
-    temp_edges = cv.Canny(template, 20, 120)
-
-    res = cv.matchTemplate(edges, temp_edges, cv.TM_CCOEFF)
-    min_val, max_val, min_loc, max_loc = cv.minMaxLoc(res)
-    top_left = max_loc
-    bottom_right = (top_left[0] + W, top_left[1] + H)
-    cv.rectangle(image, top_left, bottom_right, 255, 2)
-    # findContours has a weird attr contours. Try to use it for recognition.
-    # contours, hir = cv.findContours(edges, cv.RETR_TREE, cv.CHAIN_APPROX_NONE)
-    return image
+# TODO: Find the elongation for each contour, then print that for each CLOSED contour. Notice what elongation
+#  has the number plate.
+#  Also, try to play with trackBar of Canny thresh (the code is in test.py)
 
 
-if __name__ == "__main__":
-    #images = read_images()
-    #show_rand_image(images)
-
-    processed_image = process_image(EXAMPLE_IMG)
-    image = find_plate_template(processed_image, TEMPLATE)
-
-    cv.imshow("ex", image)
-    cv.waitKey()
+imgs = image_batch(13)
+imgs2 = imgs.copy()
+imgs, canny = process_images(imgs)
+approxes = find_plate_contours(canny)
+draw_contours(imgs2, approxes)
+path = "data/plotted-data/"
+write_images(imgs2, path)
