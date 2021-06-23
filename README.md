@@ -1,5 +1,5 @@
 # This is my PyCharm CV projects
-## 1. Car Plate detection algoritgm
+## 1. car_number_detection. Car Plate detection algoritgm
 ### This is the project for car numbers detection. Let's decompose the problem
 
 1. Find data. 
